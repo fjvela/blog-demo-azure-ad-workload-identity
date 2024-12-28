@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: develop
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-app-1
+  namespace: develop
+  annotations:
+    azure.workload.identity/client-id: "3d49c3ea-369c-4af2-b770-3a5de4d0aca2"
+    azure.workload.identity/tenant-id: "x"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: myapp
+  name: myapp
+  namespace: develop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: myapp
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: sa-app-1
+      containers:
+        - image: acrqi99.azurecr.io/app:1.0.0
+          name: app
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KV_NAME
+              value: kv-qi99
+          resources: {}
