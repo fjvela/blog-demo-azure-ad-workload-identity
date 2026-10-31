@@ -1,0 +1,106 @@
+name: Deploy infra and app
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+
+  infra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/azure
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: true
+      TF_VAR_azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    outputs:
+      resource_group_name: ${{ steps.outputs.outputs.resource_group_name }}
+      acr_name: ${{ steps.outputs.outputs.acr_name }}
+      acr_login_server: ${{ steps.outputs.outputs.acr_login_server }}
+      aks_name: ${{ steps.outputs.outputs.aks_name }}
+      workload_identity_client_id: ${{ steps.outputs.outputs.workload_identity_client_id }}
+      key_vault_name: ${{ steps.outputs.outputs.key_vault_name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.13.2
+          tofu_wrapper: false
+
+      - name: Tofu init
+        run: tofu init -input=false -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT_NAME }}"
+
+      - name: Tofu apply
+        run: tofu apply -input=false -auto-approve
+
+      - name: Tofu outputs
+        id: outputs
+        run: |
+          for name in resource_group_name acr_name acr_login_server aks_name workload_identity_client_id key_vault_name; do
+            echo "$name=$(tofu output -raw $name)" >> "$GITHUB_OUTPUT"
+          done
+
+  build:
+    runs-on: ubuntu-latest
+    needs: infra
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push image
+        id: image
+        env:
+          IMAGE: ${{ needs.infra.outputs.acr_login_server }}/app:${{ github.sha }}
+        run: |
+          az acr login --name ${{ needs.infra.outputs.acr_name }}
+          docker build --tag "$IMAGE" app
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [infra, build]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: az aks get-credentials --resource-group ${{ needs.infra.outputs.resource_group_name }} --name ${{ needs.infra.outputs.aks_name }}
+
+      - name: Deploy app
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          CLIENT_ID: ${{ needs.infra.outputs.workload_identity_client_id }}
+          TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          KV_NAME: ${{ needs.infra.outputs.key_vault_name }}
+        run: |
+          envsubst '${IMAGE} ${CLIENT_ID} ${TENANT_ID} ${KV_NAME}' < infra/k8s/app.yaml | kubectl apply -f -
+          kubectl rollout status deployment/myapp --namespace develop --timeout 5m

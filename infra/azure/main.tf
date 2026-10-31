@@ -24,7 +24,11 @@ resource "azurerm_kubernetes_cluster" "aks" {
   default_node_pool {
     name       = "default"
     node_count = 1
-    vm_size    = "Standard_D2_v2"
+    vm_size    = "Standard_D2s_v5"
+  }
+
+  node_provisioning_profile {
+    mode = "Manual"
   }
 
   identity {
@@ -49,12 +53,11 @@ resource "azurerm_user_assigned_identity" "uid" {
 }
 
 resource "azurerm_federated_identity_credential" "federated_identity_credential" {
-  name                = "aks"
-  resource_group_name = azurerm_resource_group.rg.name
-  audience            = ["api://AzureADTokenExchange"]
-  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
-  parent_id           = azurerm_user_assigned_identity.uid.id
-  subject             = "system:serviceaccount:develop:sa-app-1"
+  name                      = "aks"
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  user_assigned_identity_id = azurerm_user_assigned_identity.uid.id
+  subject                   = "system:serviceaccount:develop:sa-app-1"
 }
 
 resource "azurerm_key_vault" "kv" {
@@ -62,6 +65,7 @@ resource "azurerm_key_vault" "kv" {
   resource_group_name         = azurerm_resource_group.rg.name
   location                    = azurerm_resource_group.rg.location
   tenant_id                   = data.azurerm_client_config.current.tenant_id
+  rbac_authorization_enabled  = false
   enabled_for_disk_encryption = var.kv.enabled_for_disk_encryption
   soft_delete_retention_days  = var.kv.soft_delete_retention_days
   purge_protection_enabled    = var.kv.purge_protection_enabled
