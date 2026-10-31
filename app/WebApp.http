@@ -1,6 +1,19 @@
-@WebApp_HostAddress = http://localhost:5126
+# AKS: kubectl port-forward --namespace develop deployment/myapp 8080:8080
+# @WebApp_HostAddress = http://localhost:8080
+@WebApp_HostAddress = http://localhost:8081
+@SecretName = secret-sauce
 
-GET {{WebApp_HostAddress}}/Secrets/GetSecret/
+GET {{WebApp_HostAddress}}/Secret?name={{SecretName}}
+Accept: application/json
+
+###
+
+GET {{WebApp_HostAddress}}/Secret?name={{SecretName}}&credentialType=ManagedIdentityCredential
+Accept: application/json
+
+###
+
+GET {{WebApp_HostAddress}}/Secret?name={{SecretName}}&credentialType=ChainedTokenCredential
 Accept: application/json
 
 ###
